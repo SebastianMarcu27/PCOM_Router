@@ -1,0 +1,81 @@
+This file describes the logic and structure of the software router implemented in router.c, providing a clear
+and detailed explanation of each function and important code sequence.
+
+The file defines two main global structures: arp_records, a dynamically allocated vector holding IP-to-MAC address
+mappings used as an ARP table, and trie_base, which is the root of a binary prefix trie used to perform efficient 
+Longest Prefix Match lookups for IP routing. The variable total_arp_records tracks the number of valid entries 
+currently stored in the ARP table.
+
+The lookup_recursive function takes a pointer to the start of the ARP table, an IP address to look up, and the number
+of remaining entries. It recursively checks each entry in the table and returns the matching ARP entry if the IPs match. 
+It is used by the resolve_arp function, which simplifies the call and hides the recursion logic.
+
+The create_arp_header function dynamically allocates memory for an arp_hdr structure and fills in its fields using the 
+provided sender and target IPs and MAC addresses. It sets the appropriate ARP opcode and marks the correct hardware and 
+protocol types (Ethernet and IP). The build_ethernet_header function similarly allocates and fills an Ethernet header, 
+specifying source and destination MAC addresses and the EtherType.
+
+The assemble_arp_packet function combines the Ethernet and ARP headers into a complete ARP packet stored in a newly 
+allocated buffer. It first creates the headers using the two previous functions, copies them into the buffer, and 
+returns the pointer to the assembled packet. This is used when the router sends an ARP request for a MAC address 
+it does not yet know.
+
+The construct_icmp_packet function creates a full ICMP packet including Ethernet and IP headers. It is used both for 
+responding to Echo Requests (type 8, code 0) and for sending ICMP error messages like Destination Unreachable (type 3) 
+or Time Exceeded (type 11). The function fills in the Ethernet header by swapping the source and destination MAC 
+addresses from the received packet. The IP header is built with standard ICMP values and a reversed source-destination 
+address pair. The ICMP header is filled based on the message type and code, and the checksum is computed over the ICMP segment.
+
+The routing trie is implemented using nodes of type trie_element, which have two branches (for bit values 0 and 1) and 
+a pointer to an associated route if present. The initialize_trie_node function allocates and initializes such a node by 
+setting the branches to NULL and clearing the route pointer. extract_bit retrieves a single bit from a 32-bit integer 
+at a given position, which is essential for traversing the trie. The descend function accesses one of the node's branches. 
+The has_associated_route function checks if a given node contains a valid routing entry.
+
+The compute_significant_bits function calculates the number of contiguous 1s in a subnet mask, which tells us how many 
+bits of the IP prefix should be used to descend into the trie. The ensure_branch_exists function checks if a desired 
+branch in the trie exists and allocates it if it doesn't. The add_route_to_trie function inserts a given routing entry 
+into the trie by walking through its prefix bit by bit and attaching it to the appropriate node. The determine_best_match 
+function performs a longest-prefix search in the trie for a destination IP, returning the most specific matching route.
+
+The load_routes_from_file function reads a file line by line and parses each line into a route_table_entry structure. It 
+converts the IP addresses from text into binary and uses add_route_to_trie to populate the trie structure with the routing 
+entries. The function returns the total number of routes loaded.
+
+In main, the program begins by initializing the network interfaces via the init function, using the command-line arguments 
+passed to the program. It creates a trie root and loads the routing table from a file using the load_routes_from_file 
+function. The ARP table is allocated with a fixed size limit, and a queue is initialized to store packets that must 
+wait for ARP resolution.
+
+The main loop of the router continuously listens for incoming packets using recv_from_any_link. For each packet, it 
+extracts the Ethernet header and checks the EtherType to determine whether it is an IP or ARP packet.
+
+If it is an IP packet, the program extracts the IP header and optionally the ICMP payload. If the destination address 
+matches one of the router's interfaces and the packet is an ICMP Echo Request, the router generates an Echo Reply 
+using construct_icmp_packet and sends it. Otherwise, it verifies the IP header's checksum and looks up the appropriate 
+route in the trie. If no route is found, an ICMP Destination Unreachable message is generated. If the TTL is too low 
+(1 or less), an ICMP Time Exceeded message is sent.
+
+If forwarding is possible, the TTL is decremented and the IP checksum is updated incrementally rather than recomputing 
+from scratch. Then, the router checks if the MAC address of the next hop is known. If not, it copies the packet into 
+dynamically allocated memory and places it into the queue. It also sends an ARP Request using assemble_arp_packet to 
+try to resolve the next hop IP.
+
+If the MAC address is known, the Ethernet header is updated with the source MAC of the current interface and the 
+destination MAC of the next hop, and the packet is sent out through the appropriate interface.
+
+If the incoming packet is ARP, the program checks the ARP operation field. If it is an ARP Request and the target 
+IP matches one of the router's addresses, it constructs an ARP Reply and sends it. If it is an ARP Reply, the new 
+IP-MAC mapping is stored in the ARP table. The program then processes the pending packet queue, checking if any 
+queued packets were waiting for that MAC address. If so, it updates their Ethernet headers and forwards them.
+
+The router uses a FIFO queue to hold packets that cannot be forwarded due to unresolved MAC addresses. Once the ARP 
+Reply arrives, the queue is drained and the packets are forwarded.
+
+The IP checksum update is optimized using an incremental formula when the TTL field is changed. The packet-building 
+functions for ICMP and ARP ensure correctness by using structures that match networking standards.
+
+This implementation accurately models the behavior of a real router, including longest-prefix IP forwarding, dynamic 
+ARP resolution, ICMP error handling, and buffering of unresolved packets.
+
+When running the router with the local checker, the implementation achieves a score of 70 points.
